@@ -2739,6 +2739,54 @@ class TestLowLevelMoveGenerator(unittest.TestCase):
                            {'op': 'remove', 'path': '/VLAN_MEMBER/Vlan100|Ethernet3/tagging_mode'}],
                           moves)
 
+    def test_generate__reentered_with_diff_missing_parent__does_not_overwrite_siblings(self):
+        # The field is added next to "keep". Built from the other diff the move would collapse to
+        # add /T/K {"new": "2"}, which silently drops "keep" when applied to this run's config.
+        target = {"A": {"a": {"f": "2"}}, "T": {"K": {"keep": "1", "new": "2"}}}
+        diff = ps.Diff({"A": {"a": {"f": "1"}}, "T": {"K": {"keep": "1"}}}, target)
+        other_diff = ps.Diff({"A": {"a": {"f": "1"}}, "T": {}}, target)
+
+        moves = self.run_reentered(diff, other_diff)
+
+        self.assertEqual([[{"op": "replace", "path": "/A/a/f", "value": "2"}],
+                          [{"op": "add", "path": "/T/K/new", "value": "2"}]],
+                         [list(move.get_jsonpatch()) for move in moves])
+
+    def test_generate__reentered_with_diff_missing_list__does_not_overwrite_list(self):
+        # Built from the other diff the move would be add /L/K/items ["i3"], dropping "i1" and "i2".
+        target = {"A": {"a": {"f": "2"}}, "L": {"K": {"items": ["i1", "i2", "i3"]}}}
+        diff = ps.Diff({"A": {"a": {"f": "1"}}, "L": {"K": {"items": ["i1", "i2"]}}}, target)
+        other_diff = ps.Diff({"A": {"a": {"f": "1"}}, "L": {"K": {}}}, target)
+
+        moves = self.run_reentered(diff, other_diff)
+
+        self.assertEqual([[{"op": "replace", "path": "/A/a/f", "value": "2"}],
+                          [{"op": "add", "path": "/L/K/items/2", "value": "i3"}]],
+                         [list(move.get_jsonpatch()) for move in moves])
+
+    def test_generate__reentered_with_diff_having_parent__move_applies_to_own_config(self):
+        # Built from the other diff the move would be add /T/K/new, whose parent does not exist in
+        # this run's config, so applying it raises JsonPointerException.
+        target = {"A": {"a": {"f": "2"}}, "T": {"K": {"new": "2"}}}
+        diff = ps.Diff({"A": {"a": {"f": "1"}}}, target)
+        other_diff = ps.Diff({"A": {"a": {"f": "1"}}, "T": {"K": {}}}, target)
+
+        moves = self.run_reentered(diff, other_diff)
+
+        self.assertEqual([[{"op": "replace", "path": "/A/a/f", "value": "2"}],
+                          [{"op": "add", "path": "/T", "value": {"K": {"new": "2"}}}]],
+                         [list(move.get_jsonpatch()) for move in moves])
+        for move in moves:
+            move.apply(diff.current_config)
+
+    def run_reentered(self, diff, other_diff):
+        # The sorter recurses while generate() is suspended on a yield, which re-enters the same instance.
+        run = self.generator.generate(diff)
+        moves = [next(run)]
+        list(self.generator.generate(other_diff))
+        moves.extend(run)
+        return moves
+
     def verify(self, tc_ops=None, cc_ops=None, ex_ops=None):
         """
         Generate a diff where target config is modified using the given tc_ops.
@@ -2774,6 +2822,54 @@ class TestLowLevelMoveGenerator(unittest.TestCase):
             target_config = tc_patch.apply(target_config)
 
         return ps.Diff(current_config, target_config)
+
+
+class TestBulkLowLevelMoveGenerator(unittest.TestCase):
+    def setUp(self):
+        self.generator = ps.BulkLowLevelMoveGenerator(PathAddressing())
+
+    def test_generate_add__reentered_with_diff_missing_parent__does_not_overwrite_siblings(self):
+        # Built from the other diff the second group would be add /T/K {"n1": "1"}, add /T/K {"n2": "2"},
+        # which leaves only "n2" under /T/K when applied to this run's config.
+        target = {"A": {"a": {"p": "1", "q": "2"}}, "T": {"K": {"keep": "1", "n1": "1", "n2": "2"}}}
+        diff = ps.Diff({"A": {"a": {}}, "T": {"K": {"keep": "1"}}}, target)
+        other_diff = ps.Diff({"A": {"a": {}}, "T": {}}, target)
+
+        run = self.generator.generate_add(diff)
+        moves = [next(run)]
+        list(self.generator.generate_add(other_diff))
+        moves.extend(run)
+
+        self.assertEqual([[{"op": "add", "path": "/A/a/p", "value": "1"},
+                           {"op": "add", "path": "/A/a/q", "value": "2"}],
+                          [{"op": "add", "path": "/T/K/n1", "value": "1"},
+                           {"op": "add", "path": "/T/K/n2", "value": "2"}]],
+                         [list(move.get_jsonpatch()) for move in moves])
+
+
+class TestBulkKeyGroupLowLevelMoveGenerator(unittest.TestCase):
+    def setUp(self):
+        self.generator = ps.BulkKeyGroupLowLevelMoveGenerator(PathAddressing())
+
+    def test_generate__reentered_with_diff_missing_parent__does_not_overwrite_siblings(self):
+        # This generator drives a private BulkLowLevelMoveGenerator, so it needs the same isolation.
+        target = {"A": {"a1": {"f": "1"}, "a2": {"f": "2"}},
+                  "T": {"K1": {"n": "1"}, "K2": {"n": "2"}, "K3": {"keep": "1", "n": "3"}}}
+        diff = ps.Diff({"A": {"a1": {}, "a2": {}}, "T": {"K1": {}, "K2": {}, "K3": {"keep": "1"}}}, target)
+        other_diff = ps.Diff({"A": {"a1": {}, "a2": {}}, "T": {"K1": {}, "K2": {}}}, target)
+
+        run = self.generator.generate(diff)
+        moves = [next(run)]
+        list(self.generator.generate(other_diff))
+        moves.extend(run)
+
+        self.assertEqual([[{"op": "add", "path": "/A/a1/f", "value": "1"},
+                           {"op": "add", "path": "/A/a2/f", "value": "2"}],
+                          [{"op": "add", "path": "/T/K1/n", "value": "1"},
+                           {"op": "add", "path": "/T/K2/n", "value": "2"},
+                           {"op": "add", "path": "/T/K3/n", "value": "3"}]],
+                         [list(move.get_jsonpatch()) for move in moves])
+
 
 class RemoveCreateOnlyDependencyMoveGenerator(unittest.TestCase):
     def setUp(self):
@@ -3758,6 +3854,36 @@ class TestPatchSorter(unittest.TestCase):
 
         target_config = PatchWrapper().simulate_config_db_patch(patch, current_config)
         self.assertNotIn("prefixes_v4", target_config["BGP_ALLOWED_PREFIXES"]["DEPLOYMENT_ID|0"])
+        simulated_config = current_config
+        for change in actual_changes:
+            simulated_config = change.apply(simulated_config)
+            is_valid, error = self.config_wrapper.validate_config_db_config(simulated_config)
+            self.assertTrue(is_valid, f"Change will produce invalid config. Error: {error}")
+        self.assertEqual(target_config, simulated_config)
+
+    def test_patch_sorter__dead_end_with_valid_plan__resumed_generator_finds_the_plan(self):
+        # The search dead-ends after a low level move and resumes the suspended move generators, which must
+        # keep building moves from their own diff. The plan itself is not pinned, only that a valid one is
+        # found. The order of the tables and of the ports matters to reach the dead end.
+        port = {"admin_status": "up", "fec": "rs", "mtu": "9000", "speed": "25000"}
+        current_config = {
+            "PORT": {
+                "Ethernet8": dict(port, alias="eth8", description="Ethernet8", lanes="65"),
+                "Ethernet9": dict(port, alias="eth9", description="Ethernet9", lanes="6"),
+            },
+            "DEVICE_METADATA": {"localhost": {"hostname": "sw1", "bgp_asn": "65100"}},
+            "INTERFACE": {"Ethernet9": {}},
+        }
+        patch = jsonpatch.JsonPatch([
+            {"op": "replace", "path": "/PORT/Ethernet8/speed", "value": "100000"},
+            {"op": "replace", "path": "/PORT/Ethernet9/lanes", "value": "121,122,123,124"},
+            {"op": "add", "path": "/DEVICE_METADATA/localhost/platform", "value": "x86_64-kvm_x86_64-r0"},
+        ])
+        sorter = self.create_patch_sorter(current_config)
+
+        actual_changes = sorter.sort(patch)
+
+        target_config = PatchWrapper().simulate_config_db_patch(patch, current_config)
         simulated_config = current_config
         for change in actual_changes:
             simulated_config = change.apply(simulated_config)

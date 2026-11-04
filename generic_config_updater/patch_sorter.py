@@ -1551,28 +1551,34 @@ class BulkLowLevelMoveGenerator:
             yield move
 
     def generate_remove(self, diff, min_moves: int = 2, restricted_only: bool = False):
-        self.diff = diff
+        run = self.__single_run(diff)
         tokens = []
 
-        for move in self.__traverse(OperationType.REMOVE, self.diff.current_config, self.diff.target_config, tokens,
-                                    min_moves, restricted_only):
+        for move in run.__traverse(OperationType.REMOVE, diff.current_config, diff.target_config, tokens,
+                                   min_moves, restricted_only):
             yield move
 
     def generate_replace(self, diff, min_moves: int = 2, restricted_only: bool = False):
-        self.diff = diff
+        run = self.__single_run(diff)
         tokens = []
 
-        for move in self.__traverse(OperationType.REPLACE, self.diff.current_config, self.diff.target_config, tokens,
-                                    min_moves, restricted_only):
+        for move in run.__traverse(OperationType.REPLACE, diff.current_config, diff.target_config, tokens,
+                                   min_moves, restricted_only):
             yield move
 
     def generate_add(self, diff, min_moves: int = 2, restricted_only: bool = False):
-        self.diff = diff
+        run = self.__single_run(diff)
         tokens = []
 
-        for move in self.__traverse(OperationType.ADD, self.diff.current_config, self.diff.target_config, tokens,
-                                    min_moves, restricted_only):
+        for move in run.__traverse(OperationType.ADD, diff.current_config, diff.target_config, tokens,
+                                   min_moves, restricted_only):
             yield move
+
+    def __single_run(self, diff):
+        # See LowLevelMoveGenerator.generate() for why the diff cannot be kept on the shared instance.
+        run = copy.copy(self)
+        run.diff = diff
+        return run
 
     def __restricted_key(self, tokens, key, invert: bool = False):
         tokens.append(key)
@@ -1781,13 +1787,17 @@ class LowLevelMoveGenerator:
         self.path_addressing = path_addressing
 
     def generate(self, diff):
-        self.diff = diff
-        current_ptr = self.diff.current_config
-        target_ptr = self.diff.target_config
+        # This generator is lazy, and SortAlgorithmFactory shares one instance across the whole search.
+        # While this run is suspended on a yield the sorter recurses and calls generate() again, so
+        # keeping the diff on the shared instance would build this run's remaining moves from the wrong diff.
+        run = copy.copy(self)
+        run.diff = diff
+        current_ptr = diff.current_config
+        target_ptr = diff.target_config
         current_tokens = []
         target_tokens = []
 
-        for move in self._traverse(current_ptr, target_ptr, current_tokens, target_tokens):
+        for move in run._traverse(current_ptr, target_ptr, current_tokens, target_tokens):
             yield move
 
     def _traverse(self, current_ptr, target_ptr, current_tokens, target_tokens):

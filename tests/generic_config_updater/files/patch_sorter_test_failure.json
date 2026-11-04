@@ -105,5 +105,54 @@
         "expected_error_substrings": [
             "There is no possible sorting"
         ]
+    },
+    "NO_VALID_PLAN_WITH_REFERENCED_CREATE_ONLY_TABLE__BACKTRACKS_WITHOUT_CRASHING": {
+        "desc": "This patch has no valid plan because the field is not in YANG, so the search has to exhaust every order. When it backtracks, the suspended move generators must keep building moves from their own diff, otherwise the search aborts with a JsonPointerException instead of reporting there is no possible sorting. The order of the tables and fields below matters to reach that state.",
+        "current_config": {
+            "MIRROR_SESSION": {
+                "EVERFLOW_TUNNEL": {
+                    "dscp": "8",
+                    "dst_ip": "200.1.1.200",
+                    "src_ip": "100.1.1.1",
+                    "ttl": "255",
+                    "type": "ERSPAN"
+                }
+            },
+            "ACL_TABLE": {
+                "EVERFLOW": {
+                    "policy_desc": "EVERFLOW",
+                    "ports": [
+                        "Ethernet8"
+                    ],
+                    "stage": "ingress",
+                    "type": "MIRROR"
+                }
+            },
+            "ACL_RULE": {
+                "EVERFLOW|RULE_1": {
+                    "PRIORITY": "1000",
+                    "IP_TYPE": "IP",
+                    "MIRROR_INGRESS_ACTION": "EVERFLOW_TUNNEL"
+                }
+            },
+            "PORT": {
+                "Ethernet8": {
+                    "admin_status": "up",
+                    "alias": "fortyGigE0/8",
+                    "description": "Servers1:eth0",
+                    "index": "2",
+                    "lanes": "33,34,35,36",
+                    "mtu": "9100",
+                    "pfc_asym": "off",
+                    "speed": "40000"
+                }
+            }
+        },
+        "patch": [
+            {"op": "add", "path": "/MIRROR_SESSION/EVERFLOW_TUNNEL/field_not_in_yang", "value": "any"}
+        ],
+        "expected_error_substrings": [
+            "There is no possible sorting"
+        ]
     }
 }
